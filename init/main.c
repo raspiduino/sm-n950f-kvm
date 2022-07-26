@@ -93,11 +93,18 @@
 #include <linux/sec_ext.h>
 #endif
 #ifdef CONFIG_RKP
+#ifdef CONFIG_KVM
+#error "RKP and KVM cannot coexist!"
+#endif
 #include <linux/vmm.h>
 #include <linux/rkp.h> 
 #endif //CONFIG_RKP
 #ifdef CONFIG_RELOCATABLE_KERNEL
 #include <linux/memblock.h>
+#endif
+
+#ifdef CONFIG_KVM
+#include <linux/arm.h>
 #endif
 static int kernel_init(void *);
 
@@ -706,6 +713,9 @@ asmlinkage __visible void __init start_kernel(void)
 	rkp_reserve_mem();
 #endif
 	mm_init();
+#ifdef CONFIG_KVM
+    preinit_hyp_mode();
+#endif
 #ifdef CONFIG_RKP
 	vmm_init();
 	rkp_init();

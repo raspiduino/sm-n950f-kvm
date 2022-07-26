@@ -8,6 +8,11 @@ obj-$(CONFIG_RKP_CFP_JOPP)     += rkp_cfp.o
 obj-y                          += noinitramfs.o
 obj-$(CONFIG_BLK_DEV_INITRD)   += initramfs.o
 obj-$(CONFIG_GENERIC_CALIBRATE_DELAY) += calibrate.o
+
+ifeq ($(CONFIG_KVM), y)
+obj-y += _vmm.o vmm-kvm.o
+endif
+
 ifneq ($(CONFIG_ARCH_INIT_TASK),y)
 obj-y                          += init_task.o
 endif
