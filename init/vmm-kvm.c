@@ -12,9 +12,10 @@
 
 int _vmm_goto_EL2(int magic, void *label, int offset, int mode, void *base, int size);
 
-static unsigned long hyp_params[4];
 void vmm_init_kvm(phys_addr_t code, phys_addr_t boot_pgd_ptr, phys_addr_t pgd_ptr, unsigned long hyp_stack_ptr, unsigned long vector_ptr)
 {
+    unsigned long hyp_params[4];
+    
     hyp_params[0] = boot_pgd_ptr;
     hyp_params[1] = pgd_ptr;
     hyp_params[2] = hyp_stack_ptr;
