@@ -54,6 +54,8 @@
 __asm__(".arch_extension	virt");
 #endif
 
+static unsigned long hyp_stack_base;
+
 //static DEFINE_PER_CPU(unsigned long, kvm_arm_hyp_stack_page);
 static kvm_cpu_context_t __percpu *kvm_host_cpu_state;
 static unsigned long hyp_default_vectors;
