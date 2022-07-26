@@ -1199,11 +1199,6 @@ out_free_context:
 	free_percpu(kvm_host_cpu_state);
 out_free_mappings:
 	free_hyp_pgds();
-out_free_stack_base:
-#if 0
-	for_each_possible_cpu(cpu)
-		free_page(per_cpu(kvm_arm_hyp_stack_page, cpu));
-#endif
 out_err:
 	kvm_err("error initializing Hyp mode: %d\n", err);
 	return err;
