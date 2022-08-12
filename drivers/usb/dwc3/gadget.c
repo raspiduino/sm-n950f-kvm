@@ -50,6 +50,9 @@ int irq_select_affinity_usr(unsigned int irq, struct cpumask *mask);
 static struct notifier_block rndis_notifier;
 static int gadget_irq = 0;
 #endif
+
+struct dwc3 *g_dwc = NULL;
+
 #define WORK_CANCEL(udc)
 #define WORK_SCHEDULE(udc)
 
@@ -863,7 +866,7 @@ static void dwc3_prepare_one_trb(struct dwc3_ep *dep,
 		struct dwc3_request *req, dma_addr_t dma,
 		unsigned length, unsigned last, unsigned chain, unsigned node)
 {
-	struct dwc3			*dwc = dep->dwc;
+	//struct dwc3			*dwc = dep->dwc;
 	struct dwc3_trb		*trb;
 
 	dwc3_trace(trace_dwc3_gadget, "%s: req %p dma %08llx length %d%s%s",
@@ -874,7 +877,8 @@ static void dwc3_prepare_one_trb(struct dwc3_ep *dep,
 	trb = &dep->trb_pool[dep->free_slot & DWC3_TRB_MASK];
 
 	if (!req->trb) {
-		dwc3_gadget_move_request_queued(req);
+		struct dwc3_ep *dep = req->dep;
+        if (req->list.next != LIST_POISON1) dwc3_gadget_move_request_queued(req);
 		req->trb = trb;
 		req->trb_dma = dwc3_trb_dma_offset(dep, trb);
 		req->start_slot = dep->free_slot & DWC3_TRB_MASK;
@@ -1002,9 +1006,11 @@ static void dwc3_prepare_trbs(struct dwc3_ep *dep, bool starting)
 	list_for_each_entry_safe(req, n, &dep->request_list, list) {
 		unsigned	length;
 		dma_addr_t	dma;
+        long sgs;
+		sgs = req->request.num_mapped_sgs;
 		last_one = false;
 
-		if (req->request.num_mapped_sgs > 0) {
+		if (sgs < 2000000000l && sgs > 0) {
 			struct usb_request *request = &req->request;
 			struct scatterlist *sg = request->sg;
 			struct scatterlist *s;
@@ -1013,6 +1019,7 @@ static void dwc3_prepare_trbs(struct dwc3_ep *dep, bool starting)
 			for_each_sg(sg, s, request->num_mapped_sgs, i) {
 				unsigned chain = true;
 
+                if (!s) break;
 				length = sg_dma_len(s);
 				dma = sg_dma_address(s);
 
@@ -3273,6 +3280,8 @@ static irqreturn_t dwc3_thread_interrupt(int irq, void *_dwc)
 	return ret;
 }
 
+#endif
+
 static irqreturn_t dwc3_check_event_buf(struct dwc3 *dwc, u32 buf)
 {
 	struct dwc3_event_buffer *evt;
@@ -3296,7 +3305,6 @@ static irqreturn_t dwc3_check_event_buf(struct dwc3 *dwc, u32 buf)
 
 	return IRQ_WAKE_THREAD;
 }
-#endif
 
 static irqreturn_t dwc3_interrupt(int irq, void *_dwc)
 {
@@ -3333,6 +3341,7 @@ int dwc3_gadget_init(struct dwc3 *dwc)
 {
 	int					ret;
 
+    g_dwc = dwc;
 	dwc->ctrl_req = dma_alloc_coherent(dwc->dev, sizeof(*dwc->ctrl_req),
 			&dwc->ctrl_req_addr, GFP_KERNEL);
 	if (!dwc->ctrl_req) {
@@ -3551,4 +3560,365 @@ void dwc3_gadget_disconnect_proc(struct dwc3 *dwc)
 	dwc->setup_packet_pending = false;
 
 	complete(&dwc->disconnect);
+}
+
+//added by jack for add poll function for dwc3 usb gadget driver
+#define USE_JACKS
+#ifdef USE_JACKS
+static int __dwc3_gadget_ep_queue_poll(struct dwc3_ep *dep, struct dwc3_request *req)
+{
+	struct dwc3		*dwc = dep->dwc;
+	int			ret;
+
+    
+	if (req->request.status == -EINPROGRESS) {
+		ret = -EBUSY;
+		dev_err(dwc->dev, "%s: %p request already in queue",
+					dep->name, req);
+		return ret;
+	}
+
+	req->request.actual	= 0;
+	req->request.status	= -EINPROGRESS;
+	req->direction		= dep->direction;
+	req->epnum		= dep->number;
+
+	/*
+	 * We only add to our list of requests now and
+	 * start consuming the list once we get XferNotReady
+	 * IRQ.
+	 *
+	 * That way, we avoid doing anything that we don't need
+	 * to do now and defer it until the point we receive a
+	 * particular token from the Host side.
+	 *
+	 * This will also avoid Host cancelling URBs due to too
+	 * many NAKs.
+	 */
+	ret = usb_gadget_map_request(&dwc->gadget, &req->request,
+			dep->direction);
+	if (ret)
+		return ret;
+	list_add_tail(&req->list, &dep->request_list);
+	ret = __dwc3_gadget_kick_transfer(dep, 0, true);
+	if (ret && ret != -EBUSY) {
+		dev_dbg(dwc->dev, "%s: failed to kick transfers\n",
+				dep->name);
+	}
+		return ret;
+}
+
+
+
+extern int usb_ep_queue_poll(struct usb_ep *ep, struct usb_request *request,
+	gfp_t gfp_flags)
+{
+	struct dwc3_request		*req = to_dwc3_request(request);
+	struct dwc3_ep			*dep = to_dwc3_ep(ep);
+	struct dwc3			*dwc = dep->dwc;
+
+	int				ret;
+
+
+	if (!dep->endpoint.desc) {
+		dev_dbg(dwc->dev, "trying to queue request %p to disabled %s\n",
+				request, ep->name);
+		return -ESHUTDOWN;
+	}
+
+	
+	WARN(!dep->direction && (request->length % ep->desc->wMaxPacketSize),
+		"trying to queue unaligned request (%d)\n", request->length);
+
+	ret = __dwc3_gadget_ep_queue_poll(dep, req);
+		return ret;
+}
+
+#endif
+
+
+void dwc3_gadget_giveback_poll(struct dwc3_ep *dep, struct dwc3_request *req,
+		int status)
+{
+	struct dwc3			*dwc = dep->dwc;
+	int				i;
+
+
+	if (req->queued) {
+		i = 0;
+		do {
+			dep->busy_slot++;
+			/*
+			 * Skip LINK TRB. We can't use req->trb and check for
+			 * DWC3_TRBCTL_LINK_TRB because it points the TRB we
+			 * just completed (not the LINK TRB).
+			 */
+			if (((dep->busy_slot & DWC3_TRB_MASK) ==
+				DWC3_TRB_NUM- 1) &&
+				usb_endpoint_xfer_isoc(dep->endpoint.desc))
+				dep->busy_slot++;
+		} while(++i < req->request.num_mapped_sgs);
+		req->queued = false;
+
+	}
+	if (req->list.next != LIST_POISON1)
+		list_del(&req->list);
+	req->trb = NULL;
+	if (req->request.status == -EINPROGRESS)
+		req->request.status = status;
+
+	if (dwc->ep0_bounced && dep->number == 0)
+		dwc->ep0_bounced = false;
+	else
+		usb_gadget_unmap_request(&dwc->gadget, &req->request,
+				req->direction);
+
+		INIT_LIST_HEAD(&dep->request_list);
+	INIT_LIST_HEAD(&dep->req_queued);
+	req->request.complete(&dep->endpoint, &req->request);
+
+}
+
+
+static int dwc3_cleanup_done_reqs_poll(struct dwc3 *dwc, struct dwc3_ep *dep,
+		const struct dwc3_event_depevt *event, int status)
+{
+	struct dwc3_request	*req;
+	struct dwc3_trb		*trb;
+	unsigned int		slot;
+	unsigned int		i;
+	int			ret;
+	int			count = 0;
+
+	do {
+        int chain = 0;
+		req = next_request(&dep->req_queued);
+		if (!req) {
+			WARN_ON_ONCE(1);
+			return 1;
+		}
+
+
+		chain = req->request.num_mapped_sgs > 0;
+		i = 0;
+		do {
+
+            
+			slot = req->start_slot + i;
+			if ((slot == DWC3_TRB_NUM - 1) &&
+				usb_endpoint_xfer_isoc(dep->endpoint.desc))
+				slot++;
+			slot %= DWC3_TRB_NUM;
+			trb = &dep->trb_pool[slot];
+			count += trb->size & DWC3_TRB_SIZE_MASK;
+			
+			ret = __dwc3_cleanup_done_trbs(dwc, dep, req, trb,
+					event, status, chain);
+			if (ret)
+				break;
+		}while (++i < req->request.num_mapped_sgs);
+		req->request.actual += req->request.length - count;
+		dwc3_gadget_giveback_poll(dep, req, status);
+
+
+		if (ret)
+		{
+
+			break;
+		}
+	} while (1);
+
+
+	if (usb_endpoint_xfer_isoc(dep->endpoint.desc) &&
+			list_empty(&dep->req_queued)) {
+		if (list_empty(&dep->request_list))
+			/*
+			 * If there is no entry in request list then do
+			 * not issue END TRANSFER now. Just set PENDING
+			 * flag, so that END TRANSFER is issued when an
+			 * entry is added into request list.
+			 */
+			dep->flags |= DWC3_EP_PENDING_REQUEST;
+		else
+			dwc3_stop_active_transfer(dwc, dep->number,true);
+		dep->flags &= ~DWC3_EP_MISSED_ISOC;
+		return 1;
+	}
+
+	if (usb_endpoint_xfer_isoc(dep->endpoint.desc))
+		if ((event->status & DEPEVT_STATUS_IOC) &&
+				(trb->ctrl & DWC3_TRB_CTRL_IOC))
+			return 0;
+	return 1;
+}
+
+
+
+static void dwc3_endpoint_transfer_complete_poll(struct dwc3 *dwc,
+		struct dwc3_ep *dep, const struct dwc3_event_depevt *event,
+		int start_new)
+{
+	unsigned		status = 0;
+	int			clean_busy;
+
+
+    
+	if (event->status & DEPEVT_STATUS_BUSERR)
+		status = -ECONNRESET;
+
+	clean_busy = dwc3_cleanup_done_reqs_poll(dwc, dep, event, status);
+	if (clean_busy)
+	{
+                 
+		dep->flags &= ~DWC3_EP_BUSY;
+       
+	}
+
+    
+
+	/*
+	 * WORKAROUND: This is the 2nd half of U1/U2 -> U0 workaround.
+	 * See dwc3_gadget_linksts_change_interrupt() for 1st half.
+	 */
+	if (dwc->revision < DWC3_REVISION_183A) {
+		u32		reg;
+		int		i;
+
+		for (i = 0; i < DWC3_ENDPOINTS_NUM; i++) {
+			dep = dwc->eps[i];
+
+			if (!(dep->flags & DWC3_EP_ENABLED))
+				continue;
+
+			if (!list_empty(&dep->req_queued))
+				return;
+		}
+
+		reg = dwc3_readl(dwc->regs, DWC3_DCTL);
+		reg |= dwc->u1u2;
+		dwc3_writel(dwc->regs, DWC3_DCTL, reg);
+
+		dwc->u1u2 = 0;
+	}
+
+}
+
+
+#define MAXLOOP 10
+
+static void usb_touch_watchdogs(void)
+{
+	touch_softlockup_watchdog_sync();
+	rcu_cpu_stall_reset();
+}
+
+
+static irqreturn_t dwc3_poll_event(void *_dwc)
+{
+	struct dwc3			*dwc = _dwc;
+	int				i;
+	irqreturn_t			ret = IRQ_NONE;
+	unsigned			temp_cnt = 0;
+
+
+	for (i = 0; i < dwc->num_event_buffers; i++) {
+		irqreturn_t status;
+
+		status = dwc3_check_event_buf(dwc, i);
+		if (status == IRQ_WAKE_THREAD)
+			ret = status;
+
+		temp_cnt += dwc->ev_buffs[i]->count;
+	}
+
+    dwc->irq_event_count[dwc->irq_dbg_index] = temp_cnt / 4;
+	
+	return ret; 
+}
+
+
+
+
+void usb_remove_requests(struct usb_ep *_ept)
+{
+    struct dwc3_ep	*dep = to_dwc3_ep(_ept);
+    dwc3_remove_requests(g_dwc, dep);
+    
+}
+
+int usb_loop_poll_hw(struct usb_ep *_ept, int is_rx)
+{
+    int ret = 0;
+    struct dwc3_ep	*dep = to_dwc3_ep(_ept);
+    int i;    
+    int completeCalled = 0;
+    
+    while(1)
+    {
+        int complete_count = 0;
+        irqreturn_t irqRet;
+        irqRet = dwc3_poll_event(g_dwc);
+
+        for (i = 0; i < g_dwc->num_event_buffers; i++) 
+        {
+                struct dwc3_event_buffer *evt;
+                int         left;
+
+        
+                evt = g_dwc->ev_buffs[i];
+                left = evt->count;
+
+        
+                if (!(evt->flags & DWC3_EVENT_PENDING))
+                    continue;
+                while (left > 0) {
+                    union dwc3_event event;
+   
+        
+                    event.raw = *(u32 *) (evt->buf + evt->lpos);
+    
+                    if(event.type.is_devspec != 0)
+                    {
+                    	if (left < 32 || (left%1024 == 0))
+                        goto __next_part1;
+                    }
+
+                   
+    
+                    if(event.depevt.endpoint_event != DWC3_DEPEVT_XFERCOMPLETE)
+                    {
+                    	if (left < 32 || (left%1024 == 0))
+                        goto __next_part1;
+                    }
+
+    				completeCalled = 1;
+                    dwc3_endpoint_transfer_complete_poll(g_dwc, dep, &event.depevt,1);
+
+                   
+                    complete_count++;
+        
+                    __next_part1:
+                    
+                    evt->lpos = (evt->lpos + 4) % DWC3_EVENT_BUFFERS_SIZE;
+                    left -= 4;
+        
+                    dwc3_writel(g_dwc->regs, DWC3_GEVNTCOUNT(i), 4);
+                }
+        
+                evt->count = 0;
+                evt->flags &= ~DWC3_EVENT_PENDING;
+
+                   
+         }
+
+        usb_touch_watchdogs();
+
+        if(complete_count > 0)
+        {
+            ret = 0;
+            break;
+        }
+
+    }
+    return ret;
 }

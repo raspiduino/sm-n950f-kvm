@@ -966,6 +966,8 @@ struct dwc3 {
 
 	unsigned		sparse_transfer_control:1;
 	unsigned		is_not_vbus_pad:1;
+    unsigned        irq_event_count[10];
+	unsigned        irq_dbg_index;
 	unsigned		start_config_issued:1;
 	
 	struct work_struct      set_vbus_current_work;
