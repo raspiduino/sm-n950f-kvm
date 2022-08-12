@@ -866,7 +866,7 @@ static void dwc3_prepare_one_trb(struct dwc3_ep *dep,
 		struct dwc3_request *req, dma_addr_t dma,
 		unsigned length, unsigned last, unsigned chain, unsigned node)
 {
-	//struct dwc3			*dwc = dep->dwc;
+	struct dwc3			*dwc = dep->dwc;
 	struct dwc3_trb		*trb;
 
 	dwc3_trace(trace_dwc3_gadget, "%s: req %p dma %08llx length %d%s%s",
@@ -3713,7 +3713,7 @@ static int dwc3_cleanup_done_reqs_poll(struct dwc3 *dwc, struct dwc3_ep *dep,
 			count += trb->size & DWC3_TRB_SIZE_MASK;
 			
 			ret = __dwc3_cleanup_done_trbs(dwc, dep, req, trb,
-					event, status, chain);
+					event, status);
 			if (ret)
 				break;
 		}while (++i < req->request.num_mapped_sgs);
