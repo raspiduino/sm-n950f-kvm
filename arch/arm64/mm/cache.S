@@ -25,6 +25,8 @@
 #include <asm/alternative.h>
 #include <asm/uaccess.h>
 
+#include <linux/qdcacheflush.h>
+
 /*
  *	__flush_dcache_all()
  *
