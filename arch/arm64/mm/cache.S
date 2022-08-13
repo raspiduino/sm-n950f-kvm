@@ -185,7 +185,7 @@ ENDPROC(__flush_cache_user_range)
  *	- kaddr   - kernel address
  *	- size    - size in question
  */
-ENTRY(__flush_dcache_area)
+.global ENTRY(__flush_dcache_area)
 	dcache_by_line_op civac, sy, x0, x1, x2, x3
 	ret
 ENDPIPROC(__flush_dcache_area)
