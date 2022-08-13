@@ -2,8 +2,6 @@
 #include <asm/cacheflush.h>
 #include <linux/vmm-kvm.h>
 
-#include <linux/qdcacheflush.h>
-
 #define VMM_32BIT_SMC_CALL_MAGIC 0x82000400
 #define VMM_64BIT_SMC_CALL_MAGIC 0xC2000400
 
@@ -13,6 +11,7 @@
 #define VMM_MODE_AARCH64 1
 
 int _vmm_goto_EL2(int magic, void *label, int offset, int mode, void *base, int size);
+void __flush_dcache_area(void *addr, size_t len);
 
 void vmm_init_kvm(phys_addr_t code, phys_addr_t boot_pgd_ptr, phys_addr_t pgd_ptr, unsigned long hyp_stack_ptr, unsigned long vector_ptr)
 {
